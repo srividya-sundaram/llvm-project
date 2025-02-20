@@ -833,10 +833,14 @@ Driver::OpenMPRuntimeKind Driver::getOpenMPRuntime(const ArgList &Args) const {
 
 static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
   SmallVector<StringRef, 5> SYCLAlias = {"spir", "spir64", "spirv", "spirv32",
-                                         "spirv64"};
+                                         "spirv64", "spir64_x86_64",
+                                         "spir64_gen", "nvptx64"};
   if (llvm::is_contained(SYCLAlias, TargetArch)) {
     llvm::Triple TargetTriple;
     TargetTriple.setArchName(TargetArch);
+    // Return the full SYCL target triple string for NVidia GPU targets.
+    if (TargetTriple.getArch() == llvm::Triple::nvptx64)
+      return llvm::Triple("nvptx64-nvidia-cuda");
     TargetTriple.setVendor(llvm::Triple::UnknownVendor);
     TargetTriple.setOS(llvm::Triple::UnknownOS);
     return TargetTriple;
@@ -846,16 +850,25 @@ static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
 
 static bool addSYCLDefaultTriple(Compilation &C,
                                  SmallVectorImpl<llvm::Triple> &SYCLTriples) {
+
+  llvm::Triple DefaultTriple = getSYCLDeviceTriple(
+      C.getDefaultToolChain().getTriple().isArch32Bit() ? "spirv32"
+                                                        : "spirv64");
+  for (const auto &SYCLTriple : SYCLTriples) {
+    if (SYCLTriple == DefaultTriple)
+      return false;
+    // If we encounter a known non-spir* target, do not add the default triple.
+    if (SYCLTriple.isNVPTX() || SYCLTriple.isAMDGCN())
+      return false;
+    if(SYCLTriple.isSPIRAOT())
+      return false;
+  }
   // Check current set of triples to see if the default has already been set.
   for (const auto &SYCLTriple : SYCLTriples) {
     if (SYCLTriple.getSubArch() == llvm::Triple::NoSubArch &&
         SYCLTriple.isSPIROrSPIRV())
       return false;
   }
-  // Add the default triple as it was not found.
-  llvm::Triple DefaultTriple = getSYCLDeviceTriple(
-      C.getDefaultToolChain().getTriple().isArch32Bit() ? "spirv32"
-                                                        : "spirv64");
   SYCLTriples.insert(SYCLTriples.begin(), DefaultTriple);
   return true;
 }
@@ -1066,19 +1079,119 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
   // -ffreestanding cannot be used with -fsycl
   argSYCLIncompatible(options::OPT_ffreestanding);
 
+  // Map of SYCL target triple strings to their corresponding target archs.
+  // Example: spir64_x86_64 --> SKYLAKEAVX512
+  llvm::StringMap<llvm::DenseSet<StringRef>> DerivedArchs;
+  llvm::StringMap<StringRef> FoundNormalizedTriples;
   llvm::SmallVector<llvm::Triple, 4> UniqueSYCLTriplesVec;
-
+  // StringSet to contain SYCL target triples.
+  llvm::StringSet<> SYCLTriples;  
+  // If the user specified --offload-arch, deduce the offloading
+  // target triple(s) from the set of architecture(s).
+  // Create a toolchain for each valid triple.
+  // We do not support SYCL offloading if any of the inputs is a
+  // .cu (for CUDA type) or .hip (for HIP type) file.
   if (IsSYCL) {
-    addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+    if(C.getInputArgs().hasArg(options::OPT_offload_arch_EQ) && !IsHIP &&
+    !IsCuda) {
+
+      const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
+      auto AMDTriple = getHIPOffloadTargetTriple(*this, C.getInputArgs());
+      auto NVPTXTriple = getNVIDIAOffloadTargetTriple(*this, C.getInputArgs(),
+                                                      HostTC->getTriple());
+
+      // Attempt to deduce the offloading triple from the set of architectures.
+      // We need to temporarily create these toolchains so that we can access
+      // tools for inferring architectures.
+      llvm::DenseSet<StringRef> Archs;
+      if (NVPTXTriple) {
+        auto TempTC = std::make_unique<toolchains::CudaToolChain>(
+            *this, *NVPTXTriple, *HostTC, C.getInputArgs());
+        for (StringRef Arch :
+            getOffloadArchs(C, C.getArgs(), Action::OFK_SYCL, &*TempTC, true))
+          Archs.insert(Arch);
+      }
+      if (AMDTriple) {
+        auto TempTC = std::make_unique<toolchains::AMDGPUOpenMPToolChain>(
+            *this, *AMDTriple, *HostTC, C.getInputArgs());
+        for (StringRef Arch :
+            getOffloadArchs(C, C.getArgs(), Action::OFK_SYCL, &*TempTC, true))
+          Archs.insert(Arch);
+      }
+      if (!AMDTriple && !NVPTXTriple) {
+        for (StringRef Arch :
+            getOffloadArchs(C, C.getArgs(), Action::OFK_SYCL, nullptr, true))
+          Archs.insert(Arch);
+      }
+      for (StringRef Arch : Archs) {
+        if (NVPTXTriple && IsSYCLSupportedNVidiaGPUArch(StringToOffloadArch(
+                              getProcessorFromTargetID(*NVPTXTriple, Arch)))) {
+          DerivedArchs[NVPTXTriple->getTriple()].insert(Arch);
+        } else if (AMDTriple &&
+                  IsSYCLSupportedAMDGPUArch(StringToOffloadArch(
+                      getProcessorFromTargetID(*AMDTriple, Arch)))) {
+          DerivedArchs[AMDTriple->getTriple()].insert(Arch);
+        } else if (IsSYCLSupportedIntelCPUArch(StringToOffloadArchSYCL(Arch))) {
+          DerivedArchs[getSYCLDeviceTriple("spir64_x86_64").getTriple()].insert(
+              Arch);
+        } else if (IsSYCLSupportedIntelGPUArch(StringToOffloadArchSYCL(Arch))) {
+          StringRef IntelGPUArch;
+          // For Intel Graphics AOT target, valid values for '--offload-arch'
+          // are mapped to valid device names accepted by OCLOC (the Intel GPU AOT
+          // compiler) via the '-device' option. The mapIntelGPUArchName
+          // function maps the accepted values for '--offload-arch' to enable SYCL
+          // offloading to Intel GPUs and the corresponding '-device' value passed
+          // to OCLOC.
+          IntelGPUArch = mapIntelGPUArchName(Arch).data();
+          DerivedArchs[getSYCLDeviceTriple("spir64_gen").getTriple()].insert(
+              IntelGPUArch);
+        } else {
+          Diag(clang::diag::err_drv_invalid_sycl_target) << Arch;
+          return;
+        }
+      }
+      // Emit an error if architecture value is not provided
+      // to --offload-arch.
+      if (Archs.empty()) {
+        Diag(clang::diag::err_drv_sycl_offload_arch_missing_value);
+        return;
+      }
+
+      for (const auto &TripleAndArchs : DerivedArchs)
+        SYCLTriples.insert(TripleAndArchs.first());
+
+      for (const auto &Val : SYCLTriples) {
+        llvm::Triple SYCLTargetTriple(getSYCLDeviceTriple(Val.getKey()));
+        std::string NormalizedName = SYCLTargetTriple.normalize();
+
+        // Make sure we don't have a duplicate triple.
+        auto Duplicate = FoundNormalizedTriples.find(NormalizedName);
+        if (Duplicate != FoundNormalizedTriples.end()) {
+          Diag(clang::diag::warn_drv_sycl_offload_target_duplicate)
+              << Val.getKey() << Duplicate->second;
+          continue;
+        }
+
+        // Store the current triple so that we can check for duplicates in the
+        // following iterations.
+        FoundNormalizedTriples[NormalizedName] = Val.getKey();
+        UniqueSYCLTriplesVec.push_back(SYCLTargetTriple);
+      }
+
+      addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+    } else 
+        addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
 
     // We'll need to use the SYCL and host triples as the key into
-    // getOffloadingDeviceToolChain, because the device toolchains we're
+    // getOffloadToolChain, because the device toolchains we're
     // going to create will depend on both.
     const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
     for (const auto &TT : UniqueSYCLTriplesVec) {
       auto SYCLTC = &getOffloadToolChain(C.getInputArgs(), Action::OFK_SYCL, TT,
                                          HostTC->getTriple());
       C.addOffloadDeviceToolChain(SYCLTC, Action::OFK_SYCL);
+      if (DerivedArchs.contains(TT.getTriple()))
+          KnownArchs[SYCLTC] = DerivedArchs[TT.getTriple()];
     }
   }
 
@@ -6596,7 +6709,7 @@ const ToolChain &Driver::getOffloadToolChain(
       if (Kind == Action::OFK_HIP)
         TC = std::make_unique<toolchains::HIPAMDToolChain>(*this, Target,
                                                            *HostTC, Args);
-      else if (Kind == Action::OFK_OpenMP)
+      else if ((Kind == Action::OFK_OpenMP) || (Kind == Action::OFK_SYCL))
         TC = std::make_unique<toolchains::AMDGPUOpenMPToolChain>(*this, Target,
                                                                  *HostTC, Args);
       break;

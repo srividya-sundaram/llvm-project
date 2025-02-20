@@ -843,4 +843,14 @@ def warn_missing_include_dirs : Warning<
 
 def err_drv_malformed_warning_suppression_mapping : Error<
   "failed to process suppression mapping file '%0': %1">;
+
+def err_drv_sycl_offload_arch_missing_value : Error<
+  "must pass in an explicit cpu or gpu architecture to '--offload-arch'">;
+
+def err_drv_invalid_sycl_target : Error<"SYCL target is invalid: '%0'">;
+
+def warn_drv_sycl_offload_target_duplicate : Warning<
+  "SYCL offloading target '%0' is similar to target '%1' already specified; "
+  "will be ignored">, InGroup<SyclTarget>;
+
 }

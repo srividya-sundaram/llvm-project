@@ -617,6 +617,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
           .Cases("spirv64", "spirv64v1.0", "spirv64v1.1", "spirv64v1.2",
             "spirv64v1.3", "spirv64v1.4", "spirv64v1.5",
             "spirv64v1.6", Triple::spirv64)
+          .StartsWith("spir64", Triple::spir64)
           .StartsWith("kalimba", Triple::kalimba)
           .Case("lanai", Triple::lanai)
           .Case("renderscript32", Triple::renderscript32)
@@ -796,6 +797,16 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
 
   if (SubArchName == "arm64ec")
     return Triple::AArch64SubArch_arm64ec;
+
+  if (SubArchName.starts_with("spir")) {
+    StringRef SubArch(SubArchName);
+    if (SubArch.consume_front("spir64_") || SubArch.consume_front("spir_")) {
+      if (SubArch == "gen")
+        return Triple::SPIRSubArch_gen;
+      else if (SubArch == "x86_64")
+        return Triple::SPIRSubArch_x86_64;
+    }
+  }
 
   if (SubArchName.starts_with("spirv"))
     return StringSwitch<Triple::SubArchType>(SubArchName)
