@@ -5091,6 +5091,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   InputInfoList HostOffloadingInputs;
   const InputInfo *CudaDeviceInput = nullptr;
   const InputInfo *OpenMPDeviceInput = nullptr;
+  const InputInfo *SYCLDeviceInput = nullptr;  
   for (const InputInfo &I : Inputs) {
     if (&I == &Input || I.getType() == types::TY_Nothing) {
       // This is the primary input or contains nothing.
@@ -5108,13 +5109,15 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CudaDeviceInput = &I;
     } else if (IsOpenMPDevice && !OpenMPDeviceInput) {
       OpenMPDeviceInput = &I;
+    } else if (IsSYCL && !SYCLDeviceInput) {
+      SYCLDeviceInput = &I;
     } else {
       llvm_unreachable("unexpectedly given multiple inputs");
     }
   }
 
   const llvm::Triple *AuxTriple =
-      (IsCuda || IsHIP) ? TC.getAuxTriple() : nullptr;
+      (IsSYCL || IsCuda || IsHIP) ? TC.getAuxTriple() : nullptr;
   bool IsWindowsMSVC = RawTriple.isWindowsMSVCEnvironment();
   bool IsUEFI = RawTriple.isUEFI();
   bool IsIAMCU = RawTriple.isOSIAMCU();
@@ -5208,6 +5211,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (IsSYCL) {
     if (IsSYCLDevice) {
+      if (Triple.isNVPTX()) {
+        StringRef GPUArchName = JA.getOffloadingArch();
+        // TODO: Once default arch is moved to at least SM_53, empty arch should
+        // also result in the flag added.
+        if (!GPUArchName.empty() &&
+            StringToOffloadArch(GPUArchName) >= OffloadArch::SM_53)
+          CmdArgs.push_back("-fnative-half-type");
+      }
       // Host triple is needed when doing SYCL device compilations.
       llvm::Triple AuxT = C.getDefaultToolChain().getTriple();
       std::string NormalizedTriple = AuxT.normalize();
@@ -5220,6 +5231,33 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       // Set O2 optimization level by default
       if (!Args.getLastArg(options::OPT_O_Group))
         CmdArgs.push_back("-O2");
+      // Add any predefined macros associated with intel_gpu* type targets
+      // passed in with -fsycl-targets
+      // TODO: Macros are populated during device compilations and saved for
+      // addition to the host compilation. There is no dependence connection
+      // between device and host where we should be able to use the offloading
+      // arch to add the macro to the host compile.
+      auto addTargetMacros = [&](const llvm::Triple &Triple) {
+        if (!Triple.isSPIR() && !Triple.isNVPTX() && !Triple.isAMDGCN())
+          return;
+        SmallString<64> Macro;
+        if ((Triple.isSPIR() &&
+             Triple.getSubArch() == llvm::Triple::SPIRSubArch_gen) ||
+            Triple.isNVPTX() || Triple.isAMDGCN()) {
+          StringRef Device = JA.getOffloadingArch();
+          if (!Device.empty() &&
+              !clang::driver::getGenDeviceMacro(Device).empty()) {
+            Macro = "-D";
+            Macro += clang::driver::getGenDeviceMacro(Device);
+          }
+        } else if (Triple.getSubArch() == llvm::Triple::SPIRSubArch_x86_64)
+          Macro = "-D__SYCL_TARGET_INTEL_X86_64__";
+        if (Macro.size()) {
+          CmdArgs.push_back(Args.MakeArgString(Macro));
+          D.addSYCLTargetMacroArg(Args, Macro);
+        }
+      };
+      addTargetMacros(RawTriple);        
     } else {
       // Add any options that are needed specific to SYCL offload while
       // performing the host side compilation.
@@ -5227,6 +5265,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       // Let the front-end host compilation flow know about SYCL offload
       // compilation.
       CmdArgs.push_back("-fsycl-is-host");
+
+      // Add the SYCL target macro arguments that were generated during the
+      // device compilation step.
+      for (auto &Macro : D.getSYCLTargetMacroArgs())
+        CmdArgs.push_back(Args.MakeArgString(Macro));
     }
 
     // Set options for both host and device.

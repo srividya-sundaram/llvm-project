@@ -46,8 +46,9 @@ void AMDGPUOpenMPToolChain::addClangTargetOptions(
     Action::OffloadKind DeviceOffloadingKind) const {
   HostTC.addClangTargetOptions(DriverArgs, CC1Args, DeviceOffloadingKind);
 
-  assert(DeviceOffloadingKind == Action::OFK_OpenMP &&
-         "Only OpenMP offloading kinds are supported.");
+  assert((DeviceOffloadingKind == Action::OFK_OpenMP ||
+          DeviceOffloadingKind == Action::OFK_SYCL) &&
+         "Only OpenMP or SYCL offloading kinds are supported.");
 
   if (!DriverArgs.hasFlag(options::OPT_offloadlib, options::OPT_no_offloadlib,
                           true))

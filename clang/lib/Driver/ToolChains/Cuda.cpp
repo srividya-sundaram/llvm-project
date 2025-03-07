@@ -848,8 +848,8 @@ void CudaToolChain::addClangTargetOptions(
 
   StringRef GpuArch = DriverArgs.getLastArgValue(options::OPT_march_EQ);
   assert((DeviceOffloadingKind == Action::OFK_OpenMP ||
-          DeviceOffloadingKind == Action::OFK_Cuda) &&
-         "Only OpenMP or CUDA offloading kinds are supported for NVIDIA GPUs.");
+          DeviceOffloadingKind == Action::OFK_Cuda || DeviceOffloadingKind == Action::OFK_SYCL) &&
+         "Only OpenMP or CUDA or SYCL offloading kinds are supported for NVIDIA GPUs.");
 
   CC1Args.append({"-fcuda-is-device", "-mllvm",
                   "-enable-memcpyopt-without-libcalls",

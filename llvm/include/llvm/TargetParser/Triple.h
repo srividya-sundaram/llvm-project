@@ -176,6 +176,8 @@ public:
     DXILSubArch_v1_7,
     DXILSubArch_v1_8,
     LatestDXILSubArch = DXILSubArch_v1_8,
+    SPIRSubArch_gen,    // Sub-arch type for Intel GPUs.
+    SPIRSubArch_x86_64, // Sub-arch type for Intel CPUs.
   };
   enum VendorType {
     UnknownVendor,
@@ -876,6 +878,12 @@ public:
   bool isSPIRVLogical() const {
     return getArch() == Triple::spirv;
   }
+
+    /// Tests whether the target is SPIR and AOT related.
+    bool isSPIRAOT() const {
+      return isSPIR() && (getSubArch() == Triple::SPIRSubArch_gen ||
+                          getSubArch() == Triple::SPIRSubArch_x86_64);
+    }
 
   /// Tests whether the target is NVPTX (32- or 64-bit).
   bool isNVPTX() const {
