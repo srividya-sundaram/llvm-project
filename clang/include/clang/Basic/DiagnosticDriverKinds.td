@@ -874,4 +874,12 @@ def warn_drv_openacc_without_cir
     : Warning<"OpenACC directives will result in no runtime behavior; use "
               "-fclangir to enable runtime effect">,
       InGroup<SourceUsesOpenACC>;
+def err_drv_sycl_offload_arch_missing_value :
+    Error<"must pass in a valid cpu or gpu architecture string to '--offload-arch'">;
+
+def err_drv_invalid_sycl_target : Error<"SYCL target is invalid: '%0'">;
+
+def warn_drv_sycl_offload_target_duplicate : Warning<
+  "SYCL offloading target '%0' is similar to target '%1' already specified; "
+  "will be ignored">, InGroup<SyclTarget>;
 }

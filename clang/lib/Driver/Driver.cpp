@@ -918,8 +918,7 @@ Driver::OpenMPRuntimeKind Driver::getOpenMPRuntime(const ArgList &Args) const {
 }
 
 static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
-  SmallVector<StringRef, 5> SYCLAlias = {"spir", "spir64", "spirv", "spirv32",
-                                         "spirv64"};
+  SmallVector<StringRef, 5> SYCLAlias = {"spirv", "spirv32", "spirv64"};
   if (llvm::is_contained(SYCLAlias, TargetArch)) {
     llvm::Triple TargetTriple;
     TargetTriple.setArchName(TargetArch);
@@ -932,6 +931,16 @@ static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
 
 static bool addSYCLDefaultTriple(Compilation &C,
                                  SmallVectorImpl<llvm::Triple> &SYCLTriples) {
+
+  llvm::Triple DefaultTriple = getSYCLDeviceTriple(
+      C.getDefaultToolChain().getTriple().isArch32Bit() ? "spirv32"
+                                                        : "spirv64");
+  for (const auto &SYCLTriple : SYCLTriples) {
+    if (SYCLTriple == DefaultTriple)
+      return false;
+    if(SYCLTriple.isSPIRV())
+      return false;
+  }
   // Check current set of triples to see if the default has already been set.
   for (const auto &SYCLTriple : SYCLTriples) {
     if (SYCLTriple.getSubArch() == llvm::Triple::NoSubArch &&
