@@ -169,6 +169,17 @@ getHIPOffloadTargetTriple(const Driver &D, const ArgList &Args) {
   return std::nullopt;
 }
 
+
+static std::optional<llvm::Triple>
+getINTELOffloadTargetTriple(const Driver &D, const ArgList &Args,
+                             const llvm::Triple &HostTriple) {
+  if (!Args.hasArg(options::OPT_offload_EQ)) {
+     return llvm::Triple(HostTriple.isArch64Bit() ? "spirv64"
+                                                 : "spirv32");
+  }
+  return std::nullopt;
+}
+
 template <typename F> static bool usesInput(const ArgList &Args, F &&Fn) {
   return llvm::any_of(Args, [&](Arg *A) {
     return (A->getOption().matches(options::OPT_x) &&
@@ -1150,10 +1161,54 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
   // -ffreestanding cannot be used with -fsycl
   argSYCLIncompatible(options::OPT_ffreestanding);
 
+  llvm::StringMap<llvm::DenseSet<StringRef>> DerivedArchs;
+  llvm::StringMap<StringRef> FoundNormalizedTriples;
+  std::multiset<StringRef> SYCLTriples;  
   llvm::SmallVector<llvm::Triple, 4> UniqueSYCLTriplesVec;
 
   if (IsSYCL) {
-    addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+    if (C.getInputArgs().hasArg(options::OPT_offload_arch_EQ) &&
+               !IsHIP && !IsCuda ) {
+            const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
+            auto IntelTriple = getINTELOffloadTargetTriple(*this, C.getInputArgs(),
+                                                                  HostTC->getTriple());
+            // Attempt to deduce the offloading triple from the set of architectures.
+            // We need to temporarily create these toolchains so that we can access
+            // tools for inferring architectures.
+            llvm::DenseSet<StringRef> Archs;
+            for (const std::optional<llvm::Triple> &TT : {IntelTriple}) {
+              if (!TT)
+                continue;
+
+              auto &TC =
+                  getOffloadToolChain(C.getInputArgs(), Action::OFK_SYCL, *TT,
+                                      C.getDefaultToolChain().getTriple());
+              for (StringRef Arch :
+                  getOffloadArchs(C, C.getArgs(), Action::OFK_SYCL, &TC, true))
+                Archs.insert(Arch);
+            }
+            
+      for (StringRef Arch : Archs) {
+        if (IntelTriple && IsIntelOffloadArch(StringToOffloadArch(
+                               getProcessorFromTargetID(*IntelTriple, Arch))) ) {
+          DerivedArchs[IntelTriple->getTriple()].insert(Arch);
+        } 
+        else {
+          Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch) << Arch;
+          return;
+        }
+      }
+
+      // If the set is empty then we failed to find a native architecture.
+      if (Archs.empty()) {
+        Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch)
+            << "native";
+        return;
+      }
+
+      for (const auto &TripleAndArchs : DerivedArchs)
+        SYCLTriples.insert(TripleAndArchs.first());            
+    }
 
     // We'll need to use the SYCL and host triples as the key into
     // getOffloadingDeviceToolChain, because the device toolchains we're
@@ -4855,7 +4910,7 @@ Driver::getOffloadArchs(Compilation &C, const llvm::opt::DerivedArgList &Args,
     } else if (Kind == Action::OFK_HIP) {
       Archs.insert(OffloadArchToString(OffloadArch::HIPDefault));
     } else if (Kind == Action::OFK_SYCL) {
-      Archs.insert(StringRef());
+      Archs.insert(OffloadArchToString(OffloadArch::SYCLDefault));
     } else if (Kind == Action::OFK_OpenMP) {
       // Accept legacy `-march` device arguments for OpenMP.
       if (auto *Arg = C.getArgsForToolChain(TC, /*BoundArch=*/"", Kind)

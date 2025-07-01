@@ -109,6 +109,7 @@ enum class OffloadArch {
 
   CudaDefault = OffloadArch::SM_52,
   HIPDefault = OffloadArch::GFX906,
+  SYCLDefault = OffloadArch::BMG_G21_GPU,
 };
 
 static inline bool IsNVIDIAOffloadArch(OffloadArch A) {
