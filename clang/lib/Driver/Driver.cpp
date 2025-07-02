@@ -958,10 +958,7 @@ static bool addSYCLDefaultTriple(Compilation &C,
         SYCLTriple.isSPIROrSPIRV())
       return false;
   }
-  // Add the default triple as it was not found.
-  llvm::Triple DefaultTriple = getSYCLDeviceTriple(
-      C.getDefaultToolChain().getTriple().isArch32Bit() ? "spirv32"
-                                                        : "spirv64");
+
   SYCLTriples.insert(SYCLTriples.begin(), DefaultTriple);
   return true;
 }
@@ -1194,30 +1191,51 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
           DerivedArchs[IntelTriple->getTriple()].insert(Arch);
         } 
         else {
-          Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch) << Arch;
+          Diag(clang::diag::err_drv_invalid_sycl_target) << Arch;
           return;
         }
       }
 
       // If the set is empty then we failed to find a native architecture.
       if (Archs.empty()) {
-        Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch)
-            << "native";
+        Diag(clang::diag::err_drv_sycl_offload_arch_missing_value);
         return;
       }
 
       for (const auto &TripleAndArchs : DerivedArchs)
-        SYCLTriples.insert(TripleAndArchs.first());            
-    }
+        SYCLTriples.insert(TripleAndArchs.first());
+
+      for (StringRef Val : SYCLTriples) {
+        llvm::Triple SYCLTargetTriple(getSYCLDeviceTriple(Val));
+        std::string NormalizedName = SYCLTargetTriple.normalize();
+
+        // Make sure we don't have a duplicate triple.
+        auto [TripleIt, Inserted] =
+            FoundNormalizedTriples.try_emplace(NormalizedName, Val);
+
+        if (!Inserted) {
+          Diag(clang::diag::warn_drv_sycl_offload_target_duplicate)
+              << Val << TripleIt->second;
+          continue;
+        }
+        UniqueSYCLTriplesVec.push_back(SYCLTargetTriple);
+      }
+
+      addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+
+    } else
+      addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
 
     // We'll need to use the SYCL and host triples as the key into
-    // getOffloadingDeviceToolChain, because the device toolchains we're
+    // getOffloadToolChain, because the device toolchains we're
     // going to create will depend on both.
     const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
     for (const auto &TT : UniqueSYCLTriplesVec) {
       auto SYCLTC = &getOffloadToolChain(C.getInputArgs(), Action::OFK_SYCL, TT,
                                          HostTC->getTriple());
       C.addOffloadDeviceToolChain(SYCLTC, Action::OFK_SYCL);
+      if (DerivedArchs.contains(TT.getTriple()))
+        KnownArchs[SYCLTC] = DerivedArchs[TT.getTriple()];
     }
   }
 
@@ -6804,7 +6822,7 @@ const ToolChain &Driver::getOffloadToolChain(
       if (Kind == Action::OFK_HIP)
         TC = std::make_unique<toolchains::HIPAMDToolChain>(*this, Target,
                                                            *HostTC, Args);
-      else if (Kind == Action::OFK_OpenMP)
+      else if ((Kind == Action::OFK_OpenMP) || (Kind == Action::OFK_SYCL))
         TC = std::make_unique<toolchains::AMDGPUOpenMPToolChain>(*this, Target,
                                                                  *HostTC, Args);
       break;
