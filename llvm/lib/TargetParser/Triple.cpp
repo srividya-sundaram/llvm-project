@@ -284,6 +284,7 @@ StringRef Triple::getOSTypeName(OSType Kind) {
   case AMDPAL: return "amdpal";
   case BridgeOS: return "bridgeos";
   case CUDA: return "cuda";
+  case SYCL: return "sycl";
   case Darwin: return "darwin";
   case DragonFly: return "dragonfly";
   case DriverKit: return "driverkit";
@@ -695,6 +696,7 @@ static Triple::OSType parseOS(StringRef OSName) {
     .StartsWith("nacl", Triple::NaCl)
     .StartsWith("aix", Triple::AIX)
     .StartsWith("cuda", Triple::CUDA)
+    .StartsWith("sycl", Triple::SYCL)
     .StartsWith("nvcl", Triple::NVCL)
     .StartsWith("amdhsa", Triple::AMDHSA)
     .StartsWith("ps4", Triple::PS4)

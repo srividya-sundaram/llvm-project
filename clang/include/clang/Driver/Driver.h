@@ -846,6 +846,22 @@ public:
   /// Compute the default -fmodule-cache-path.
   /// \return True if the system provides a default cache directory.
   static bool getDefaultModuleCachePath(SmallVectorImpl<char> &Result);
+  /// Vector of Macros that need to be added to the Host compilation in a
+  /// SYCL based offloading scenario.  These macros are gathered during
+  /// construction of the device compilations.
+  mutable std::vector<std::string> SYCLTargetMacro;
+
+  /// addSYCLTargetMacro - Add the given macro to the vector of args to be
+  /// added to the host compilation step.
+  void addSYCLTargetMacro(const llvm::opt::ArgList &Args,
+    StringRef Macro) const {
+    SYCLTargetMacro.push_back(Args.MakeArgString(Macro));
+  }
+
+  /// getSYCLTargetMacro - return the previously gathered macro target args.
+  llvm::ArrayRef<std::string> getSYCLTargetMacro() const {
+    return SYCLTargetMacro;
+  }
 };
 
 /// \return True if the last defined optimization level is -Ofast.

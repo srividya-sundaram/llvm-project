@@ -102,13 +102,14 @@ enum class OffloadArch {
   Generic, // A processor model named 'generic' if the target backend defines a
            // public one.
   // Intel CPUs
-  GRANITERAPIDS,
+  GRANITERAPIDS_CPU,
   // Intel GPUs
-  BMG_G21,
+  BMG_G21_GPU,
   LAST,
 
   CudaDefault = OffloadArch::SM_52,
   HIPDefault = OffloadArch::GFX906,
+  SYCLDefault = OffloadArch::BMG_G21_GPU,
 };
 
 static inline bool IsNVIDIAOffloadArch(OffloadArch A) {
@@ -121,11 +122,11 @@ static inline bool IsAMDOffloadArch(OffloadArch A) {
 }
 
 static inline bool IsIntelCPUOffloadArch(OffloadArch Arch) {
-  return Arch >= OffloadArch::GRANITERAPIDS && Arch < OffloadArch::BMG_G21;
+  return Arch >= OffloadArch::GRANITERAPIDS_CPU && Arch < OffloadArch::BMG_G21_GPU;
 }
 
 static inline bool IsIntelGPUOffloadArch(OffloadArch Arch) {
-  return Arch >= OffloadArch::BMG_G21 && Arch < OffloadArch::LAST;
+  return Arch >= OffloadArch::BMG_G21_GPU && Arch < OffloadArch::LAST;
 }
 
 static inline bool IsIntelOffloadArch(OffloadArch Arch) {

@@ -169,6 +169,17 @@ getHIPOffloadTargetTriple(const Driver &D, const ArgList &Args) {
   return std::nullopt;
 }
 
+
+static std::optional<llvm::Triple>
+getINTELOffloadTargetTriple(const Driver &D, const ArgList &Args,
+                             const llvm::Triple &HostTriple) {
+  if (!Args.hasArg(options::OPT_offload_EQ)) {
+    return llvm::Triple(HostTriple.isArch64Bit() ? "spirv64-intel-sycl"
+                                                 : "spirv32-intel-sycl");
+  }
+  return std::nullopt;
+}
+
 template <typename F> static bool usesInput(const ArgList &Args, F &&Fn) {
   return llvm::any_of(Args, [&](Arg *A) {
     return (A->getOption().matches(options::OPT_x) &&
@@ -918,13 +929,12 @@ Driver::OpenMPRuntimeKind Driver::getOpenMPRuntime(const ArgList &Args) const {
 }
 
 static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
-  SmallVector<StringRef, 5> SYCLAlias = {"spir", "spir64", "spirv", "spirv32",
-                                         "spirv64"};
+  SmallVector<StringRef, 5> SYCLAlias = {"spirv", "spirv32", "spirv64"};
   if (llvm::is_contained(SYCLAlias, TargetArch)) {
     llvm::Triple TargetTriple;
     TargetTriple.setArchName(TargetArch);
-    TargetTriple.setVendor(llvm::Triple::UnknownVendor);
-    TargetTriple.setOS(llvm::Triple::UnknownOS);
+    TargetTriple.setVendor(llvm::Triple::Intel);
+    TargetTriple.setOS(llvm::Triple::SYCL);
     return TargetTriple;
   }
   return llvm::Triple(TargetArch);
@@ -932,16 +942,17 @@ static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
 
 static bool addSYCLDefaultTriple(Compilation &C,
                                  SmallVectorImpl<llvm::Triple> &SYCLTriples) {
-  // Check current set of triples to see if the default has already been set.
-  for (const auto &SYCLTriple : SYCLTriples) {
-    if (SYCLTriple.getSubArch() == llvm::Triple::NoSubArch &&
-        SYCLTriple.isSPIROrSPIRV())
-      return false;
-  }
-  // Add the default triple as it was not found.
+  // Default triple is spirv32-unknown-unknown or
+  // spirv64-unknown-unknown.
   llvm::Triple DefaultTriple = getSYCLDeviceTriple(
       C.getDefaultToolChain().getTriple().isArch32Bit() ? "spirv32"
                                                         : "spirv64");
+
+  // Check current triple to see if the default has already been set.
+  for (const auto &SYCLTriple : SYCLTriples) {
+    if (SYCLTriple == DefaultTriple)
+      return false;
+  }
   SYCLTriples.insert(SYCLTriples.begin(), DefaultTriple);
   return true;
 }
@@ -1141,19 +1152,89 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
   // -ffreestanding cannot be used with -fsycl
   argSYCLIncompatible(options::OPT_ffreestanding);
 
+  llvm::StringMap<llvm::DenseSet<StringRef>> DerivedArchs;
+  llvm::StringMap<StringRef> FoundNormalizedTriples;
+  std::multiset<StringRef> SYCLTriples;  
   llvm::SmallVector<llvm::Triple, 4> UniqueSYCLTriplesVec;
 
   if (IsSYCL) {
-    addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+    if (C.getInputArgs().hasArg(options::OPT_offload_arch_EQ) &&
+               !IsHIP && !IsCuda ) {
+            const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
+            auto IntelTriple = getINTELOffloadTargetTriple(*this, C.getInputArgs(),
+                                                                  HostTC->getTriple());
+            // Attempt to deduce the offloading triple from the set of architectures.
+            // We need to temporarily create these toolchains so that we can access
+            // tools for inferring architectures.
+            llvm::DenseSet<StringRef> Archs;
+            for (const std::optional<llvm::Triple> &TT : {IntelTriple}) {
+              if (!TT)
+                continue;
+
+              auto &TC =
+                  getOffloadToolChain(C.getInputArgs(), Action::OFK_SYCL, *TT,
+                                      C.getDefaultToolChain().getTriple());
+              for (StringRef Arch :
+                  getOffloadArchs(C, C.getArgs(), Action::OFK_SYCL, &TC, true))
+                Archs.insert(Arch);
+            }
+
+            for (StringRef Arch : Archs) {
+              if (IntelTriple &&
+                  IsIntelOffloadArch(StringToOffloadArch(
+                      getProcessorFromTargetID(*IntelTriple, Arch)))) {
+                DerivedArchs[IntelTriple->getTriple()].insert(Arch);
+              } else {
+                Diag(clang::diag::err_drv_invalid_sycl_target) << Arch;
+                return;
+              }
+            }
+
+            // If the set is empty then we failed to find a native architecture.
+            if (Archs.empty()) {
+              Diag(clang::diag::err_drv_sycl_offload_arch_missing_value);
+              return;
+            }
+
+            for (const auto &TripleAndArchs : DerivedArchs)
+              SYCLTriples.insert(TripleAndArchs.first()); //spirv64-intel-sycl
+
+            for (StringRef Val : SYCLTriples) {
+              llvm::Triple SYCLTargetTriple(getSYCLDeviceTriple(Val));
+              std::string NormalizedName = SYCLTargetTriple.normalize();
+
+              // Make sure we don't have a duplicate triple.
+              auto [TripleIt, Inserted] =
+                  FoundNormalizedTriples.try_emplace(NormalizedName, Val);
+
+              if (!Inserted) {
+                Diag(clang::diag::warn_drv_sycl_offload_target_duplicate)
+                    << Val << TripleIt->second;
+                continue;
+              }
+
+              // If the specified target is invalid, emit a diagnostic.
+              if (SYCLTargetTriple.getArch() == llvm::Triple::UnknownArch) {
+                Diag(clang::diag::err_drv_invalid_sycl_target) << Val;
+                continue;
+              }
+
+              UniqueSYCLTriplesVec.push_back(SYCLTargetTriple);
+            }
+            addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+    } else
+      addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
 
     // We'll need to use the SYCL and host triples as the key into
-    // getOffloadingDeviceToolChain, because the device toolchains we're
+    // getOffloadToolChain, because the device toolchains we're
     // going to create will depend on both.
     const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
     for (const auto &TT : UniqueSYCLTriplesVec) {
       auto SYCLTC = &getOffloadToolChain(C.getInputArgs(), Action::OFK_SYCL, TT,
                                          HostTC->getTriple());
       C.addOffloadDeviceToolChain(SYCLTC, Action::OFK_SYCL);
+      if (DerivedArchs.contains(TT.getTriple()))
+        KnownArchs[SYCLTC] = DerivedArchs[TT.getTriple()];
     }
   }
 
@@ -4846,7 +4927,7 @@ Driver::getOffloadArchs(Compilation &C, const llvm::opt::DerivedArgList &Args,
     } else if (Kind == Action::OFK_HIP) {
       Archs.insert(OffloadArchToString(OffloadArch::HIPDefault));
     } else if (Kind == Action::OFK_SYCL) {
-      Archs.insert(StringRef());
+      Archs.insert(OffloadArchToString(OffloadArch::SYCLDefault));
     } else if (Kind == Action::OFK_OpenMP) {
       // Accept legacy `-march` device arguments for OpenMP.
       if (auto *Arg = C.getArgsForToolChain(TC, /*BoundArch=*/"", Kind)
@@ -6740,7 +6821,7 @@ const ToolChain &Driver::getOffloadToolChain(
       if (Kind == Action::OFK_HIP)
         TC = std::make_unique<toolchains::HIPAMDToolChain>(*this, Target,
                                                            *HostTC, Args);
-      else if (Kind == Action::OFK_OpenMP)
+      else if ((Kind == Action::OFK_OpenMP) || (Kind == Action::OFK_SYCL))
         TC = std::make_unique<toolchains::AMDGPUOpenMPToolChain>(*this, Target,
                                                                  *HostTC, Args);
       break;

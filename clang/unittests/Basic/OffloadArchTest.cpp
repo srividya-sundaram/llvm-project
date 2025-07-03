@@ -21,14 +21,14 @@ TEST(OffloadArchTest, basic) {
   EXPECT_TRUE(IsAMDOffloadArch(OffloadArch::GFX1201));
   EXPECT_TRUE(IsAMDOffloadArch(OffloadArch::GFX12_GENERIC));
   EXPECT_TRUE(IsAMDOffloadArch(OffloadArch::AMDGCNSPIRV));
-  EXPECT_FALSE(IsAMDOffloadArch(OffloadArch::GRANITERAPIDS));
+  EXPECT_FALSE(IsAMDOffloadArch(OffloadArch::GRANITERAPIDS_CPU));
 
-  EXPECT_TRUE(IsIntelOffloadArch(OffloadArch::GRANITERAPIDS));
-  EXPECT_TRUE(IsIntelCPUOffloadArch(OffloadArch::GRANITERAPIDS));
-  EXPECT_FALSE(IsIntelGPUOffloadArch(OffloadArch::GRANITERAPIDS));
-  EXPECT_TRUE(IsIntelOffloadArch(OffloadArch::BMG_G21));
-  EXPECT_FALSE(IsIntelCPUOffloadArch(OffloadArch::BMG_G21));
-  EXPECT_TRUE(IsIntelGPUOffloadArch(OffloadArch::BMG_G21));
+  EXPECT_TRUE(IsIntelOffloadArch(OffloadArch::GRANITERAPIDS_CPU));
+  EXPECT_TRUE(IsIntelCPUOffloadArch(OffloadArch::GRANITERAPIDS_CPU));
+  EXPECT_FALSE(IsIntelGPUOffloadArch(OffloadArch::GRANITERAPIDS_CPU));
+  EXPECT_TRUE(IsIntelOffloadArch(OffloadArch::BMG_G21_GPU));
+  EXPECT_FALSE(IsIntelCPUOffloadArch(OffloadArch::BMG_G21_GPU));
+  EXPECT_TRUE(IsIntelGPUOffloadArch(OffloadArch::BMG_G21_GPU));
 
   EXPECT_FALSE(IsNVIDIAOffloadArch(OffloadArch::Generic));
   EXPECT_FALSE(IsAMDOffloadArch(OffloadArch::Generic));

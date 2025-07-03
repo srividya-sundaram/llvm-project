@@ -221,6 +221,7 @@ public:
     NaCl, // Native Client
     AIX,
     CUDA,   // NVIDIA CUDA
+    SYCL,   // INTEL SYCL
     NVCL,   // NVIDIA OpenCL
     AMDHSA, // AMD HSA Runtime
     PS4,
