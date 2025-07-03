@@ -1197,7 +1197,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
             }
 
             for (const auto &TripleAndArchs : DerivedArchs)
-              SYCLTriples.insert(TripleAndArchs.first());
+              SYCLTriples.insert(TripleAndArchs.first()); //spirv64-intel-sycl
 
             for (StringRef Val : SYCLTriples) {
               llvm::Triple SYCLTargetTriple(getSYCLDeviceTriple(Val));

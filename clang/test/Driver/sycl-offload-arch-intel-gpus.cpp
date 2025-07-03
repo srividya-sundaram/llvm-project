@@ -6,6 +6,6 @@
 // RUN:   FileCheck %s --check-prefixes=TARGET-TRIPLE-GPU,CLANG-OFFLOAD-PACKAGER-GPU -DDEV_STR=bmg_g21_gpu -DMAC_STR=BMG_G21_GPU
 
 
-// TARGET-TRIPLE-GPU: clang{{.*}} "-triple" "spirv64-unknown-unknown"
-// CLANG-OFFLOAD-PACKAGER-GPU: clang-offload-packager{{.*}} "--image={{.*}}triple=spirv64-unknown-unknown,arch=[[DEV_STR]],kind=sycl"
-// CLANG-OFFLOAD-PACKAGER-GPU-OPTS: clang-offload-packager{{.*}} "--image={{.*}}triple=spirv64-unknown-unknown,arch=[[DEV_STR]],kind=sycl{{.*}}"
+// TARGET-TRIPLE-GPU: clang{{.*}} "-triple" "spirv64-intel-sycl"
+// CLANG-OFFLOAD-PACKAGER-GPU: clang-offload-packager{{.*}} "--image={{.*}}triple=spirv64-intel-sycl,arch=[[DEV_STR]],kind=sycl"
+// CLANG-OFFLOAD-PACKAGER-GPU-OPTS: clang-offload-packager{{.*}} "--image={{.*}}triple=spirv64-intel-sycl,arch=[[DEV_STR]],kind=sycl{{.*}}"

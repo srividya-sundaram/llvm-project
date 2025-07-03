@@ -5,8 +5,8 @@
 // RUN: %clangxx -### -fsycl --offload-arch=graniterapids_cpu %s 2>&1 | \
 // RUN:   FileCheck %s --check-prefixes=TARGET-TRIPLE-CPU,CLANG-OFFLOAD-PACKAGER-CPU -DDEV_STR=graniterapids_cpu
 
-// TARGET-TRIPLE-CPU: clang{{.*}} "-triple" "spirv64-unknown-unknown"
-// CLANG-OFFLOAD-PACKAGER-CPU: clang-offload-packager{{.*}} "--image={{.*}}triple=spirv64-unknown-unknown,arch=[[DEV_STR]],kind=sycl"
+// TARGET-TRIPLE-CPU: clang{{.*}} "-triple" "spirv64-intel-sycl"
+// CLANG-OFFLOAD-PACKAGER-CPU: clang-offload-packager{{.*}} "--image={{.*}}triple=spirv64-intel-sycl,arch=[[DEV_STR]],kind=sycl"
 
 // Tests for handling a missing architecture.
 //
@@ -25,4 +25,5 @@
 // RUN:   | FileCheck -check-prefix=BAD-ARCH %s
 
 // BAD-ARCH: error: SYCL target is invalid: 'badArch'
+
 
