@@ -174,8 +174,8 @@ static std::optional<llvm::Triple>
 getINTELOffloadTargetTriple(const Driver &D, const ArgList &Args,
                              const llvm::Triple &HostTriple) {
   if (!Args.hasArg(options::OPT_offload_EQ)) {
-     return llvm::Triple(HostTriple.isArch64Bit() ? "spirv64"
-                                                 : "spirv32");
+    return llvm::Triple(HostTriple.isArch64Bit() ? "spirv64-intel-sycl"
+                                                 : "spirv32-intel-sycl");
   }
   return std::nullopt;
 }
@@ -933,8 +933,8 @@ static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
   if (llvm::is_contained(SYCLAlias, TargetArch)) {
     llvm::Triple TargetTriple;
     TargetTriple.setArchName(TargetArch);
-    TargetTriple.setVendor(llvm::Triple::UnknownVendor);
-    TargetTriple.setOS(llvm::Triple::UnknownOS);
+    TargetTriple.setVendor(llvm::Triple::Intel);
+    TargetTriple.setOS(llvm::Triple::SYCL);
     return TargetTriple;
   }
   return llvm::Triple(TargetArch);
@@ -942,23 +942,17 @@ static llvm::Triple getSYCLDeviceTriple(StringRef TargetArch) {
 
 static bool addSYCLDefaultTriple(Compilation &C,
                                  SmallVectorImpl<llvm::Triple> &SYCLTriples) {
-
+  // Default triple is spirv32-unknown-unknown or
+  // spirv64-unknown-unknown.
   llvm::Triple DefaultTriple = getSYCLDeviceTriple(
       C.getDefaultToolChain().getTriple().isArch32Bit() ? "spirv32"
                                                         : "spirv64");
+
+  // Check current triple to see if the default has already been set.
   for (const auto &SYCLTriple : SYCLTriples) {
     if (SYCLTriple == DefaultTriple)
       return false;
-    if(SYCLTriple.isSPIRV())
-      return false;
   }
-  // Check current set of triples to see if the default has already been set.
-  for (const auto &SYCLTriple : SYCLTriples) {
-    if (SYCLTriple.getSubArch() == llvm::Triple::NoSubArch &&
-        SYCLTriple.isSPIROrSPIRV())
-      return false;
-  }
-
   SYCLTriples.insert(SYCLTriples.begin(), DefaultTriple);
   return true;
 }
@@ -1184,45 +1178,50 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
                   getOffloadArchs(C, C.getArgs(), Action::OFK_SYCL, &TC, true))
                 Archs.insert(Arch);
             }
-            
-      for (StringRef Arch : Archs) {
-        if (IntelTriple && IsIntelOffloadArch(StringToOffloadArch(
-                               getProcessorFromTargetID(*IntelTriple, Arch))) ) {
-          DerivedArchs[IntelTriple->getTriple()].insert(Arch);
-        } 
-        else {
-          Diag(clang::diag::err_drv_invalid_sycl_target) << Arch;
-          return;
-        }
-      }
 
-      // If the set is empty then we failed to find a native architecture.
-      if (Archs.empty()) {
-        Diag(clang::diag::err_drv_sycl_offload_arch_missing_value);
-        return;
-      }
+            for (StringRef Arch : Archs) {
+              if (IntelTriple &&
+                  IsIntelOffloadArch(StringToOffloadArch(
+                      getProcessorFromTargetID(*IntelTriple, Arch)))) {
+                DerivedArchs[IntelTriple->getTriple()].insert(Arch);
+              } else {
+                Diag(clang::diag::err_drv_invalid_sycl_target) << Arch;
+                return;
+              }
+            }
 
-      for (const auto &TripleAndArchs : DerivedArchs)
-        SYCLTriples.insert(TripleAndArchs.first());
+            // If the set is empty then we failed to find a native architecture.
+            if (Archs.empty()) {
+              Diag(clang::diag::err_drv_sycl_offload_arch_missing_value);
+              return;
+            }
 
-      for (StringRef Val : SYCLTriples) {
-        llvm::Triple SYCLTargetTriple(getSYCLDeviceTriple(Val));
-        std::string NormalizedName = SYCLTargetTriple.normalize();
+            for (const auto &TripleAndArchs : DerivedArchs)
+              SYCLTriples.insert(TripleAndArchs.first());
 
-        // Make sure we don't have a duplicate triple.
-        auto [TripleIt, Inserted] =
-            FoundNormalizedTriples.try_emplace(NormalizedName, Val);
+            for (StringRef Val : SYCLTriples) {
+              llvm::Triple SYCLTargetTriple(getSYCLDeviceTriple(Val));
+              std::string NormalizedName = SYCLTargetTriple.normalize();
 
-        if (!Inserted) {
-          Diag(clang::diag::warn_drv_sycl_offload_target_duplicate)
-              << Val << TripleIt->second;
-          continue;
-        }
-        UniqueSYCLTriplesVec.push_back(SYCLTargetTriple);
-      }
+              // Make sure we don't have a duplicate triple.
+              auto [TripleIt, Inserted] =
+                  FoundNormalizedTriples.try_emplace(NormalizedName, Val);
 
-      addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
+              if (!Inserted) {
+                Diag(clang::diag::warn_drv_sycl_offload_target_duplicate)
+                    << Val << TripleIt->second;
+                continue;
+              }
 
+              // If the specified target is invalid, emit a diagnostic.
+              if (SYCLTargetTriple.getArch() == llvm::Triple::UnknownArch) {
+                Diag(clang::diag::err_drv_invalid_sycl_target) << Val;
+                continue;
+              }
+
+              UniqueSYCLTriplesVec.push_back(SYCLTargetTriple);
+            }
+            addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
     } else
       addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
 
